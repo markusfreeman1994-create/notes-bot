@@ -61,16 +61,38 @@ async def help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def list_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+
+    # извлекаем page из callback_data
     _, page_str = q.data.split("|", 1)
-    page = int(page_str)
+
+    # --- ВАЛИДАЦИЯ/НОРМАЛИЗАЦИЯ page ---
+    try:
+        page = int(page_str)
+    except ValueError:
+        page = 0
+    if page < 0:
+        page = 0
+    # ------------------------------------
+
     user_id = q.from_user.id
-    logging.info("List notes page=%s for user=%s", page, user_id)
     with SessionLocal() as s:
         total = count_notes(s, user_id=user_id)
-        notes = list_notes(s, user_id=user_id, offset=page * PAGE_SIZE, limit=PAGE_SIZE)
-    if total == 0:
-        await q.edit_message_text(messages.NO_NOTES, reply_markup=main_menu())
-        return
+        if total == 0:
+            await q.edit_message_text(messages.NO_NOTES, reply_markup=main_menu())
+            return
+
+        # нормализуем page по числу страниц
+        max_page = (total - 1) // PAGE_SIZE
+        if page > max_page:
+            page = max_page
+
+        notes = list_notes(
+            s,
+            user_id=user_id,
+            offset=page * PAGE_SIZE,
+            limit=PAGE_SIZE,
+        )
+
     await q.edit_message_text(
         f"Твои заметки ({total}):",
         reply_markup=notes_list_kb(notes, page, total, PAGE_SIZE),
@@ -165,6 +187,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logging.info("Action cancelled")
     return ConversationHandler.END
 
+async def noop_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Закрываем "крутилку" у кнопки с callback_data="noop"
+    await update.callback_query.answer()
+
 # ---- Конструктор приложения ----
 def build_app() -> Application:
     init_db()
@@ -179,6 +205,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(view_cb, pattern=r"^view\|\d+\|\d+$"))
     app.add_handler(CallbackQueryHandler(del_cb, pattern=r"^del\|\d+\|\d+$"))
     app.add_handler(CallbackQueryHandler(cancel, pattern="^cancel$"))
+    app.add_handler(CallbackQueryHandler(noop_cb, pattern="^noop$"))
 
     # диалоги
     conv_new = ConversationHandler(
